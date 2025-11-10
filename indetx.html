@@ -1,0 +1,369 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Mark-and-Sweep GC Simulator</title>
+  <style>
+    :root{
+      --bg: #faf9f6;
+      --card: #fff;
+      --accent: #f5c542; /* gold */
+      --accent-dark: #e3b024;
+      --muted: #7b7b7b;
+      --text: #222;
+      --border: rgba(0,0,0,0.06);
+      --shadow: 0 8px 30px rgba(15,15,15,0.06);
+      --live: #34d399;
+      --garbage: #ef4444;
+      --glass: rgba(255,255,255,0.6);
+    }
+
+    [data-theme="dark"]{
+      --bg: #0f1112;
+      --card: #131516;
+      --accent: #f1c93b;
+      --muted: #b4b4b6;
+      --text: #eee;
+      --border: rgba(255,255,255,0.06);
+      --shadow: 0 10px 40px rgba(0,0,0,0.6);
+    }
+
+    html,body{height:100%;margin:0;font-family:Inter, ui-sans-serif, system-ui, -apple-system,"Segoe UI",Roboto,Arial;color:var(--text);background:var(--bg);-webkit-font-smoothing:antialiased}
+    .app{max-width:1180px;margin:28px auto;padding:22px;background:var(--card);border-radius:16px;box-shadow:var(--shadow)}
+    header{display:flex;align-items:flex-start;justify-content:space-between;gap:12px;flex-wrap:wrap}
+    h1{margin:0;font-size:20px;font-weight:800}
+    .controls{display:flex;flex-direction:column;gap:10px;align-items:flex-end}
+    .controls-row{display:flex;gap:10px;align-items:center;flex-wrap:wrap}
+    label{font-size:13px;color:var(--muted);display:flex;gap:8px;align-items:center}
+    input[type=number]{width:88px;padding:6px;border-radius:8px;border:1px solid var(--border);background:transparent;color:var(--text)}
+    button{background:var(--accent);border:0;padding:8px 14px;border-radius:10px;color:#111;cursor:pointer;font-weight:800;box-shadow:0 4px 12px rgba(0,0,0,0.06);transition:transform .12s ease,background .12s}
+    button:hover{transform:translateY(-2px);background:var(--accent-dark)}
+    button.secondary{background:transparent;color:var(--muted);border:1px solid var(--border);font-weight:800}
+    .toggle { background: transparent; border:1px solid var(--border); padding:7px 10px; border-radius:10px; cursor:pointer; color:var(--muted); font-weight:800 }
+    .panel{margin-top:16px;padding:16px;border-radius:12px;background:linear-gradient(180deg, rgba(0,0,0,0.01), rgba(0,0,0,0.01));border:1px solid var(--border)}
+    .status-row{display:flex;gap:12px;align-items:center;flex-wrap:wrap;margin-bottom:12px}
+    .status-card{display:flex;gap:16px;align-items:center;padding:10px 12px;border-radius:12px;background:var(--card);box-shadow:0 4px 18px rgba(0,0,0,0.03);border:1px solid var(--border)}
+    .status-pill{display:flex;flex-direction:column;align-items:center;padding:6px 10px;border-radius:10px;min-width:120px}
+    .status-pill .label{font-size:12px;color:var(--muted);margin-bottom:6px}
+    .status-pill .value{font-weight:900;font-size:16px}
+    .mode-badge{padding:6px 10px;border-radius:10px;background:linear-gradient(90deg, rgba(0,0,0,0.02), rgba(0,0,0,0.01));font-weight:800}
+    .progress{height:12px;background:rgba(0,0,0,0.04);border-radius:8px;overflow:hidden;margin-left:6px;flex:1}
+    .progress > i{display:block;height:100%;width:0;background:linear-gradient(90deg,var(--accent),var(--accent-dark));transition:width 160ms linear}
+
+    /* Grid of tuple cards */
+    .heap-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin-top:12px}
+    .tuple-card{background:var(--card);border:1px solid var(--border);padding:10px;border-radius:10px;min-height:112px;display:flex;flex-direction:column;gap:8px;transition:transform .12s,box-shadow .12s}
+    .tuple-card:hover{transform:translateY(-6px);box-shadow:0 10px 30px rgba(0,0,0,0.06)}
+    .tuple-head{display:flex;align-items:center;gap:8px}
+    .tuple-id{font-weight:900;color:var(--muted);font-size:13px}
+    .tuple-meta{margin-left:auto;font-size:13px;color:var(--muted);font-weight:800}
+
+    /* versions 4x4 */
+    .versions-grid{display:grid;grid-template-columns:repeat(4,1fr);grid-auto-rows:14px;gap:6px;align-items:center}
+    .ver{width:100%;height:14px;border-radius:4px;opacity:0;transform:scale(.8);transition:opacity .22s, transform .22s}
+    .ver.active{background:var(--live);opacity:1;transform:scale(1)}
+    .ver.garbage{background:var(--garbage);opacity:1;transform:scale(1)}
+    .ver.empty{background:transparent;opacity:.06;border-radius:4px}
+
+    .log{margin-top:12px;height:120px;overflow:auto;padding:10px;border-radius:10px;background:transparent;border:1px dashed var(--border);color:var(--muted);font-size:13px}
+
+    .counters{display:flex;gap:8px;align-items:center;margin-top:8px}
+    .counter{padding:6px 10px;border-radius:8px;background:rgba(0,0,0,0.03);font-weight:800}
+
+    @media (max-width:980px){
+      .heap-grid{grid-template-columns:repeat(2,1fr)}
+    }
+    @media (max-width:520px){
+      .heap-grid{grid-template-columns:repeat(1,1fr)}
+      .controls{align-items:flex-start}
+    }
+  </style>
+</head>
+<body>
+  <div class="app" id="app">
+    <header>
+      <h1>Mark and Sweep Algoritmn</h1>
+      <div class="controls">
+        <div class="controls-row">
+          <label>Tuples <input id="numTuples" type="number" value="16" min="4" max="2000"></label>
+          <label>Max versions <input id="maxVersions" type="number" value="12" min="1" max="50"></label>
+          <label>Abort rate <input id="abortRate" type="number" value="0.35" min="0" max="1" step="0.01"></label>
+        </div>
+        <div class="controls-row">
+          <button id="btnGenerate">Generate DB</button>
+          <button id="btnBG">Run GC</button>
+          <button id="btnTx" class="secondary">Start Auto Sim (5s)</button>
+          <button id="themeToggle" class="toggle">🌞 Light</button>
+        </div>
+      </div>
+    </header>
+
+    <div class="panel">
+      <!-- Status card above heap -->
+      <div class="status-row">
+        <div class="status-card" style="gap:10px">
+          <div class="status-pill">
+            <div class="label">🟢 Active Tx</div>
+            <div id="activeTx" class="value">0</div>
+          </div>
+          <div class="status-pill">
+            <div class="label">🔴 Aborted Tx</div>
+            <div id="abortedTx" class="value">0</div>
+          </div>
+          <div class="status-pill">
+            <div class="label">🟡 Committed Versions</div>
+            <div id="committed" class="value">0</div>
+          </div>
+
+          <div style="display:flex;align-items:center;margin-left:8px">
+            <div class="mode-badge" id="modeBadge">Manual Mode</div>
+            <div style="width:220px;margin-left:12px;display:flex;align-items:center">
+              <div style="font-size:12px;color:var(--muted);font-weight:700;margin-right:8px">GC progress</div>
+              <div class="progress" style="flex:1"><i id="bgProg"></i></div>
+            </div>
+          </div>
+        </div>
+
+        <div style="margin-left:auto;display:flex;flex-direction:column;gap:8px;align-items:flex-end">
+          <div style="font-size:13px;color:var(--muted);font-weight:800">Legend</div>
+          <div style="display:flex;gap:8px;align-items:center">
+            <div style="width:12px;height:12px;background:var(--live);border-radius:3px"></div><div style="color:var(--muted);font-weight:800">Live</div>
+            <div style="width:12px;height:12px;background:var(--garbage);border-radius:3px;margin-left:8px"></div><div style="color:var(--muted);font-weight:800">Garbage</div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Heap grid -->
+      <div class="heap-grid" id="heapGrid"></div>
+
+      <div class="log" id="log"></div>
+    </div>
+  </div>
+
+  <script>
+    // State
+    let DB = [];
+    let totalVersions = 0;
+    let simInterval = null;
+    let autoGcInterval = null;
+    const SIM_MS = 5000; // 5 seconds per your request
+    let activeTxCount = 0;
+    let abortedTxCount = 0;
+    let committedCount = 0;
+    let autoMode = false;
+
+    // Helpers
+    function $id(n){ return document.getElementById(n); }
+    function log(...args){
+      const el = $id('log');
+      el.innerText = [new Date().toLocaleTimeString(), ...args].join(' - ') + '\n' + el.innerText;
+    }
+    function setProgress(p){ $id('bgProg').style.width = Math.max(0,Math.min(100,p))+'%'; }
+
+    // Stats update
+    function updateStats(){
+      let live = 0;
+      DB.forEach(t => t.versions.forEach(v => v.active && live++));
+      const garbage = totalVersions - live;
+      activeTxCount = activeTxCount; // simulated separately
+      $id('activeTx').innerText = activeTxCount;
+      $id('abortedTx').innerText = abortedTxCount;
+      $id('committed').innerText = committedCount;
+      // log small changes not necessary, keep clean
+    }
+
+    // Render heap as grid by ID (4 columns)
+    function renderHeap(){
+      const grid = $id('heapGrid');
+      grid.innerHTML = '';
+      // ensure ordered by id
+      DB.sort((a,b) => a.id - b.id);
+      DB.forEach(tuple=>{
+        const card = document.createElement('div'); card.className = 'tuple-card';
+        const head = document.createElement('div'); head.className = 'tuple-head';
+        const idEl = document.createElement('div'); idEl.className='tuple-id'; idEl.innerText = `id:${tuple.id}`;
+        const meta = document.createElement('div'); meta.className='tuple-meta'; meta.innerText = `${tuple.versions.length} ver`;
+        head.appendChild(idEl); head.appendChild(meta);
+        const versions = document.createElement('div'); versions.className='versions-grid';
+
+        // show newest-first visually (but grid read left->right top->down)
+        const vis = tuple.versions.slice(-16); // latest up to 16
+        // we will fill grid left->right with newest first, so reverse to show newest at first cell
+        const arranged = vis.slice().reverse();
+
+        // fill arranged then pad with empties to always show 16 cells (keeps layout stable)
+        for(let i=0;i<16;i++){
+          const cell = document.createElement('div');
+          if(i < arranged.length){
+            const v = arranged[i];
+            cell.className = 'ver ' + (v.active ? 'active' : 'garbage');
+            cell.title = `v${v.versionId} ${v.active ? 'live' : 'garbage'}`;
+          } else {
+            cell.className = 'ver empty';
+          }
+          versions.appendChild(cell);
+        }
+
+        card.appendChild(head);
+        card.appendChild(versions);
+        grid.appendChild(card);
+      });
+    }
+
+    // Generate DB
+    function generateDatabase(numTuples, maxVersions, abortRate){
+      DB = []; totalVersions = 0; activeTxCount = 0; abortedTxCount = 0; committedCount = 0;
+      for(let i=0;i<numTuples;i++){
+        const tuple = { id: i+1, versions: [] };
+        const nv = Math.max(1, Math.floor(Math.random() * maxVersions) + 1);
+        for(let v=0; v<nv; v++){
+          const isGarbage = Math.random() < abortRate;
+          tuple.versions.push({ versionId: totalVersions++, active: !isGarbage });
+          if(!isGarbage) committedCount++; else abortedTxCount++;
+        }
+        DB.push(tuple);
+      }
+      // small view of active txs
+      activeTxCount = Math.max(0, Math.floor(committedCount * 0.18));
+      updateStats(); renderHeap();
+      log('Database generated', `tuples=${numTuples}`, `versions=${totalVersions}`);
+    }
+
+    // Incremental mark & sweep (non-blocking)
+    function runGCIncremental(isAuto=false){
+      $id('modeBadge').innerText = isAuto ? 'Auto Sim (GC running)' : 'Manual GC (running)';
+      setProgress(0);
+      log((isAuto ? 'Auto' : 'Manual') + ' GC started');
+      const chunk = 40;
+      let idx = 0;
+      const marked = new Set();
+
+      function markChunk(){
+        const end = Math.min(DB.length, idx + chunk);
+        for(let i=idx;i<end;i++){
+          DB[i].versions.forEach(v => { if(v.active) marked.add(v.versionId); });
+        }
+        idx = end;
+        setProgress((idx/DB.length) * 50);
+        if(idx < DB.length) setTimeout(markChunk, 0);
+        else {
+          // sweep in chunks
+          let sIdx = 0;
+          function sweepChunk(){
+            const end2 = Math.min(DB.length, sIdx + chunk);
+            for(let i=sIdx;i<end2;i++){
+              const before = DB[i].versions.length;
+              DB[i].versions = DB[i].versions.filter(v => marked.has(v.versionId));
+              // count removed => update aborted if needed (but we already track aborted versions)
+            }
+            sIdx = end2;
+            setProgress(50 + (sIdx/DB.length)*50);
+            renderHeap(); updateStats();
+            if(sIdx < DB.length) setTimeout(sweepChunk, 0);
+            else {
+              setProgress(0);
+              $id('modeBadge').innerText = autoMode ? 'Auto Sim (5s)' : 'Manual Mode';
+              log((isAuto ? 'Auto' : 'Manual') + ' GC finished');
+            }
+          }
+          setTimeout(sweepChunk, 0);
+        }
+      }
+      setTimeout(markChunk, 0);
+    }
+
+    // Simulation step (add versions, flip some to aborted)
+    function simulationStep(){
+      if(DB.length === 0) return;
+      const ops = Math.max(3, Math.floor(DB.length * 0.08)); // a few ops each sim
+      for(let k=0;k<ops;k++){
+        const tid = Math.floor(Math.random() * DB.length);
+        const tuple = DB[tid];
+        const newV = { versionId: totalVersions++, active: Math.random() > 0.25 };
+        tuple.versions.push(newV);
+        if(newV.active) committedCount++; else abortedTxCount++;
+        // randomly abort an earlier live version
+        if(tuple.versions.length > 1 && Math.random() < 0.12){
+          const idx = Math.floor(Math.random()*(tuple.versions.length-1));
+          if(tuple.versions[idx].active){
+            tuple.versions[idx].active = false;
+            abortedTxCount++;
+            committedCount = Math.max(0, committedCount - 1);
+          }
+        }
+      }
+      // vary active tx count to simulate running transactions
+      activeTxCount = Math.max(0, Math.floor(Math.random() * Math.min(400, committedCount)));
+      updateStats(); renderHeap();
+      log('Simulation step: ' + ops + ' ops');
+    }
+
+    // Toggle Auto Sim
+    function toggleSimulation(){
+      const btn = $id('btnTx');
+      autoMode = !autoMode;
+      if(autoMode){
+        // start sim and auto-gc every SIM_MS
+        simInterval = setInterval(simulationStep, SIM_MS);
+        autoGcInterval = setInterval(()=>runGCIncremental(true), SIM_MS);
+        btn.classList.remove('secondary'); btn.classList.add('active');
+        btn.innerText = 'Stop Auto Sim';
+        $id('modeBadge').innerText = 'Auto Sim (5s)';
+        // ensure DB exists
+        if(DB.length === 0){
+          const nt = parseInt($id('numTuples').value,10);
+          const mv = parseInt($id('maxVersions').value,10);
+          const ar = parseFloat($id('abortRate').value);
+          generateDatabase(nt,mv,ar);
+        }
+        log('Auto simulation started (5s interval)');
+      } else {
+        clearInterval(simInterval); simInterval = null;
+        clearInterval(autoGcInterval); autoGcInterval = null;
+        btn.classList.add('secondary'); btn.classList.remove('active');
+        btn.innerText = 'Start Auto Sim (5s)';
+        $id('modeBadge').innerText = 'Manual Mode';
+        log('Auto simulation stopped');
+      }
+    }
+
+    // Wire up controls
+    $id('btnGenerate').onclick = () => {
+      const nt = Math.max(4, parseInt($id('numTuples').value,10));
+      const mv = Math.max(1, parseInt($id('maxVersions').value,10));
+      const ar = Math.min(1, Math.max(0, parseFloat($id('abortRate').value)));
+      generateDatabase(nt, mv, ar);
+    };
+    $id('btnBG').onclick = () => runGCIncremental(false);
+    $id('btnTx').onclick = toggleSimulation;
+
+    // theme toggle
+    $id('themeToggle').onclick = () => {
+      const body = document.body;
+      if(body.getAttribute('data-theme') === 'dark'){
+        body.removeAttribute('data-theme'); $id('themeToggle').textContent = '🌞 Light';
+      } else {
+        body.setAttribute('data-theme','dark'); $id('themeToggle').textContent = '🌙 Dark';
+      }
+    };
+
+    // initial boot
+    window.addEventListener('load', ()=>{
+      // sensible defaults for a clear 4x4 grid layout
+      $id('numTuples').value = 16;
+      $id('maxVersions').value = 12;
+      $id('abortRate').value = 0.35;
+      $id('btnGenerate').click();
+    });
+
+    // Expose some internals for debugging (console)
+    window.__sim = {
+      getDB: () => DB,
+      step: simulationStep,
+      gc: () => runGCIncremental(false),
+      toggleAuto: toggleSimulation
+    };
+  </script>
+</body>
+</html>
